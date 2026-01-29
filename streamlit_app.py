@@ -41,6 +41,27 @@ def render_symbol_header(ticker_jk: str, base: str, subtitle: str = ""):
             st.caption(subtitle)
 
 
+def style_fig(fig: go.Figure, height: int, title: str):
+    fig.update_layout(height=height, title=title, margin=dict(l=10, r=10, t=40, b=10))
+    return fig
+
+
+def round_cols(df: pd.DataFrame, cols, digits: int):
+    df = df.copy()
+    for col in cols:
+        if col in df.columns:
+            df[col] = df[col].round(digits)
+    return df
+
+
+def render_kpis(universe, start, picked):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Universe", f"{len(universe):,} ticker")
+    c2.metric("Start Date", str(start))
+    c3.metric("Selected", len(picked))
+    c4.metric("Mode", "Teknikal + Fundamental")
+
+
 st.set_page_config(page_title="IDX Dashboard — Teknikal + Fundamental", layout="wide")
 st.markdown("""
 <style>
@@ -116,14 +137,90 @@ with st.sidebar:
         st.stop()
 
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Universe", f"{len(universe):,} ticker")
-c2.metric("Start Date", str(start))
-c3.metric("Selected", len(picked))
-c4.metric("Mode", "Teknikal + Fundamental")
-st.divider()
+tab_explore, tab_tech, tab_fund, tab_combo = st.tabs(
+    ["🧭 Explore", "📈 Teknikal", "🧾 Fundamental", "🧩 Gabungan"]
+)
 
-tab_tech, tab_fund, tab_combo = st.tabs(["📈 Teknikal", "🧾 Fundamental", "🧩 Gabungan"])
+
+with tab_explore:
+    render_kpis(universe, start, picked)
+    st.divider()
+
+    st.subheader("Explore — Insight Dashboard")
+
+    mode = st.radio(
+        "Mode Analisis",
+        ["Teknikal", "Fundamental", "Gabungan"],
+        horizontal=True,
+        key="explore_mode"
+    )
+
+    if mode == "Teknikal":
+        st.subheader("📈 Technical Market Snapshot")
+
+        with st.spinner("Loading price data..."):
+            data = load_prices(picked, start=str(start))
+
+        if not data:
+            st.warning("Tidak ada data harga yang berhasil diambil.")
+            st.stop()
+
+        rows = []
+        for t, dfp in data.items():
+            s = health_from_df(dfp)
+            rows.append({
+                "ticker": t,
+                "ticker_base": to_base_ticker(t),
+                "health_tech": s.get("health"),
+                "trend": s.get("trend"),
+                "risk": s.get("risk"),
+                "liquidity": s.get("liq"),
+            })
+
+        tech_df = pd.DataFrame(rows).dropna(subset=["health_tech"])
+        if tech_df.empty:
+            st.warning("Skor teknikal belum bisa dihitung (data kurang panjang / banyak NaN).")
+            st.stop()
+
+        tech_df["bucket"] = tech_df["health_tech"].apply(label_bucket)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Avg Technical Score", f"{tech_df['health_tech'].mean():.1f}")
+        c2.metric("% Strong", f"{(tech_df['bucket']=='Strong').mean()*100:.0f}%")
+        c3.metric("Median Risk", f"{tech_df['risk'].median():.2f}")
+        c4.metric("Saham Dianalisis", len(tech_df))
+
+        st.divider()
+
+        left, right = st.columns([0.45, 0.55])
+
+        with left:
+            donut = tech_df["bucket"].value_counts().reset_index()
+            donut.columns = ["Bucket", "Count"]
+            fig = px.pie(donut, names="Bucket", values="Count", hole=0.6)
+            fig = style_fig(fig, height=360, title="Distribusi Kualitas Teknikal")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with right:
+            bar_df = tech_df[["trend", "risk"]].mean().reset_index()
+            bar_df.columns = ["Metric", "Average"]
+            fig = px.bar(bar_df, x="Metric", y="Average", text="Average")
+            fig = style_fig(fig, height=360, title="Rata-rata Trend vs Risk")
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.divider()
+
+        top = tech_df.sort_values("health_tech", ascending=False).head(15)
+        top = round_cols(top, ["health_tech", "trend", "risk", "liquidity"], 2)
+        st.dataframe(
+            top[["ticker", "health_tech", "bucket", "trend", "risk", "liquidity"]],
+            use_container_width=True,
+            hide_index=True
+        )
+    elif mode == "Fundamental":
+        st.info("Fundamental dashboard akan dirapikan menyusul.")
+    elif mode == "Gabungan":
+        st.info("Gabungan dashboard akan dirapikan menyusul.")
 
 
 with tab_tech:
