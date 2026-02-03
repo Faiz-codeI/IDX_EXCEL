@@ -19,7 +19,7 @@ def label_bucket(x):
     if pd.isna(x):
         return "N/A"
     if x >= 75:
-        return "🟢 Strong"
+        return "Strong"
     if x >= 60:
-        return "🟡 Watch"
-    return "🔴 Risky"
+        return "Watch"
+    return "Risky"
