@@ -92,6 +92,59 @@ def inject_css() -> None:
         .card h4 { margin: 0 0 0.25rem 0; font-size: 1.05rem; }
         .muted { color: rgba(255,255,255,0.65); }
 
+        /* Dashboard tiles */
+        .dash-card {
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 16px;
+          padding: 0.9rem 1rem;
+          background: rgba(255,255,255,0.04);
+          box-shadow: 0 10px 20px rgba(0,0,0,0.20);
+          transition: transform 0.15s ease, box-shadow 0.15s ease;
+          position: relative;
+          overflow: hidden;
+        }
+        .dash-card::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(120% 120% at 0% 0%, rgba(255,255,255,0.10), transparent 50%);
+          opacity: 0.8;
+          pointer-events: none;
+        }
+        .dash-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 14px 26px rgba(0,0,0,0.28);
+        }
+        .dash-title { font-size: 0.9rem; letter-spacing: 0.3px; color: rgba(255,255,255,0.7); }
+        .dash-value { font-size: 1.45rem; font-weight: 700; margin-top: 0.2rem; }
+        .dash-sub { color: rgba(255,255,255,0.6); font-size: 0.82rem; }
+        .dash-accent {
+          position: absolute;
+          inset: 0;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.10);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+          pointer-events: none;
+        }
+        .dash-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          font-size: 0.72rem;
+          padding: 0.18rem 0.5rem;
+          border-radius: 999px;
+          background: rgba(0,0,0,0.25);
+          border: 1px solid rgba(255,255,255,0.12);
+          color: rgba(255,255,255,0.75);
+        }
+        .chart-card {
+          border: 1px solid rgba(255,255,255,0.10);
+          border-radius: 16px;
+          padding: 0.3rem 0.6rem 0.6rem;
+          background: rgba(255,255,255,0.03);
+          box-shadow: 0 10px 24px rgba(0,0,0,0.16);
+        }
+
         /* Table polish */
         div[data-testid="stDataFrame"] { border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.10); }
 
@@ -427,12 +480,27 @@ def render_kpis(options_universe: list[str], start, picked: list[str], sector_li
     c4.metric("Sectors", f"{len(sector_list):,}")
 
 
+def render_dash_metric(title: str, value: str, subtitle: str = "", accent: str = "#00c896"):
+    sub_html = f'<div class="dash-sub">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f"""
+        <div class="dash-card">
+          <div class="dash-title"><span class="dash-chip" style="border-color:{accent}; color:{accent};">●</span> {title}</div>
+          <div class="dash-value">{value}</div>
+          {sub_html}
+          <div class="dash-accent" style="border-color:{accent};"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _mode_selector():
     st.subheader("Explore — Insight Dashboard")
     st.caption("Pilih mode dulu. Setelah itu lihat ringkasan (KPI) → distribusi → top ranking.")
     mode = st.radio(
         "Mode",
-        ["Teknikal", "Fundamental", "Gabungan"],
+        ["Dashboard", "Teknikal", "Fundamental", "Gabungan"],
         horizontal=True,
         key="explore_mode",
     )
@@ -635,9 +703,131 @@ with tab_explore:
     mode = _mode_selector()
 
     # -------------------------
+    # DASHBOARD (SINGLE SLIDE)
+    # -------------------------
+    if mode == "Dashboard":
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("🧭 Ringkas — Single Slide Dashboard")
+        st.caption("Ringkasannya dibuat compact supaya tidak perlu scroll jauh. Detail ada di expander.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        with st.spinner("Loading price data..."):
+            raw_data = load_prices(picked, start=str(start), debug=True)
+
+        data = show_prices_debug(raw_data, picked, debug_mode)
+
+        if not data:
+            st.warning("Tidak ada data harga yang berhasil diambil. Cek ticker / koneksi.")
+            st.stop()
+
+        tech_rows = []
+        for t, dfp in data.items():
+            s = health_from_df(dfp)
+            tech_rows.append(
+                {
+                    "ticker": t,
+                    "ticker_base": to_base_ticker(t),
+                    "health_tech": s.get("health", np.nan),
+                    "trend": s.get("trend", np.nan),
+                    "risk": s.get("risk", np.nan),
+                    "liquidity": s.get("liq", np.nan),
+                }
+            )
+
+        tech_df = pd.DataFrame(tech_rows).dropna(subset=["health_tech"]).copy()
+        if tech_df.empty:
+            st.warning("Skor teknikal belum bisa dihitung (data kurang panjang / banyak NaN).")
+            st.stop()
+
+        fund_view = core_ref[["ticker_base", "sector", "fund_health_0_100", "fund_bucket"]].rename(
+            columns={"fund_health_0_100": "fund_norm_0_100"}
+        )
+        combined = tech_df.merge(fund_view, on="ticker_base", how="left")
+        if sync_tech_to_fund:
+            combined = combined.dropna(subset=["fund_norm_0_100"])
+
+        if combined.empty:
+            st.warning("Tidak ada ticker yang match setelah sinkron fundamental.")
+            st.stop()
+
+        denom = (w_tech + w_fund) if (w_tech + w_fund) > 0 else 1.0
+        combined["score_combined"] = ((combined["health_tech"] * w_tech) + (combined["fund_norm_0_100"] * w_fund)) / denom
+        combined["bucket"] = combined["score_combined"].apply(label_bucket)
+
+        avg_combined = float(pd.to_numeric(combined["score_combined"], errors="coerce").mean())
+        avg_tech = float(pd.to_numeric(combined["health_tech"], errors="coerce").mean())
+        avg_fund = float(pd.to_numeric(combined["fund_norm_0_100"], errors="coerce").mean())
+        pct_strong = float((combined["bucket"] == "Strong").mean() * 100)
+
+        m1, m2, m3, m4 = st.columns(4, gap="large")
+        with m1:
+            render_dash_metric("Avg Combined", f"{avg_combined:.1f}", "Teknikal + Fundamental", accent="#00c896")
+        with m2:
+            render_dash_metric("Avg Tech", f"{avg_tech:.1f}", "Skor teknik (0–100)", accent="#7dd3fc")
+        with m3:
+            render_dash_metric("Avg Fund", f"{avg_fund:.1f}", f"Tahun {int(ref_year)}", accent="#f5c542")
+        with m4:
+            render_dash_metric("% Strong", f"{pct_strong:.0f}%", f"{len(combined):,} emiten", accent="#a78bfa")
+
+        c1, c2, c3 = st.columns([0.34, 0.33, 0.33], gap="large")
+        with c1:
+            donut = combined["bucket"].value_counts().reset_index()
+            donut.columns = ["Bucket", "Count"]
+            fig = px.pie(
+                donut,
+                names="Bucket",
+                values="Count",
+                hole=0.62,
+                color="Bucket",
+                category_orders={"Bucket": bucket_order},
+                color_discrete_map=BUCKET_COLORS,
+            )
+            fig = style_fig(fig, height=320, title="Distribusi Bucket (Combined)")
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c2:
+            top_view = combined.sort_values("score_combined", ascending=False).head(12)
+            fig = px.bar(
+                top_view.sort_values("score_combined", ascending=True),
+                x="score_combined",
+                y="ticker",
+                orientation="h",
+                color="bucket",
+                color_discrete_map=BUCKET_COLORS,
+            )
+            fig = style_fig(fig, height=320, title="Top 12 Combined Score")
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c3:
+            fig = px.scatter(
+                combined,
+                x="health_tech",
+                y="fund_norm_0_100",
+                size="score_combined",
+                color="bucket",
+                hover_name="ticker",
+                color_discrete_map=BUCKET_COLORS,
+            )
+            fig = style_fig(fig, height=320, title="Tech vs Fund (Bubble)")
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with st.expander("Lihat detail kandidat", expanded=False):
+            top_n = safe_topn_slider("Top N", len(combined), default=30, min_floor=5, cap=200, key="topn_dash")
+            view = combined.sort_values("score_combined", ascending=False).head(top_n).copy()
+            view = round_cols(view, ["health_tech", "fund_norm_0_100", "score_combined"], 2)
+            show_cols = ["ticker", "sector", "score_combined", "bucket", "health_tech", "fund_norm_0_100", "trend", "risk", "liquidity"]
+            st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
+
+    # -------------------------
     # TEKNIKAL
     # -------------------------
-    if mode == "Teknikal":
+    elif mode == "Teknikal":
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("📈 Technical Market Snapshot")
         st.caption("Tujuan: screening cepat berdasarkan trend/risk/liquidity + skor teknikal (0–100).")
