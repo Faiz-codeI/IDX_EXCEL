@@ -92,6 +92,59 @@ def inject_css() -> None:
         .card h4 { margin: 0 0 0.25rem 0; font-size: 1.05rem; }
         .muted { color: rgba(255,255,255,0.65); }
 
+        /* Dashboard tiles */
+        .dash-card {
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 16px;
+          padding: 0.9rem 1rem;
+          background: rgba(255,255,255,0.04);
+          box-shadow: 0 10px 20px rgba(0,0,0,0.20);
+          transition: transform 0.15s ease, box-shadow 0.15s ease;
+          position: relative;
+          overflow: hidden;
+        }
+        .dash-card::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(120% 120% at 0% 0%, rgba(255,255,255,0.10), transparent 50%);
+          opacity: 0.8;
+          pointer-events: none;
+        }
+        .dash-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 14px 26px rgba(0,0,0,0.28);
+        }
+        .dash-title { font-size: 0.9rem; letter-spacing: 0.3px; color: rgba(255,255,255,0.7); }
+        .dash-value { font-size: 1.45rem; font-weight: 700; margin-top: 0.2rem; }
+        .dash-sub { color: rgba(255,255,255,0.6); font-size: 0.82rem; }
+        .dash-accent {
+          position: absolute;
+          inset: 0;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.10);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+          pointer-events: none;
+        }
+        .dash-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          font-size: 0.72rem;
+          padding: 0.18rem 0.5rem;
+          border-radius: 999px;
+          background: rgba(0,0,0,0.25);
+          border: 1px solid rgba(255,255,255,0.12);
+          color: rgba(255,255,255,0.75);
+        }
+        .chart-card {
+          border: 1px solid rgba(255,255,255,0.10);
+          border-radius: 16px;
+          padding: 0.3rem 0.6rem 0.6rem;
+          background: rgba(255,255,255,0.03);
+          box-shadow: 0 10px 24px rgba(0,0,0,0.16);
+        }
+
         /* Table polish */
         div[data-testid="stDataFrame"] { border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.10); }
 
@@ -155,6 +208,81 @@ def round_cols(df: pd.DataFrame, cols: list[str], nd: int) -> pd.DataFrame:
     return out
 
 
+def clip_0_100_series(series: pd.Series) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    return s.clip(lower=0, upper=100)
+
+
+def clip_0_100_value(value) -> float:
+    v = pd.to_numeric(value, errors="coerce")
+    if pd.isna(v):
+        return np.nan
+    return float(np.clip(v, 0, 100))
+
+
+def winsor_minmax_0_100(series: pd.Series, p_low: float, p_high: float) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    if s.notna().sum() == 0:
+        return pd.Series([np.nan] * len(s), index=s.index)
+    lo = s.quantile(p_low)
+    hi = s.quantile(p_high)
+    if pd.isna(lo) or pd.isna(hi) or hi == lo:
+        out = pd.Series(np.nan, index=s.index, dtype=float)
+        out.loc[s.notna()] = 50.0
+        return out
+    clipped = s.clip(lower=lo, upper=hi)
+    return ((clipped - lo) / (hi - lo) * 100.0).astype(float)
+
+
+def normalize_by_sector(df: pd.DataFrame, score_col: str, sector_col: str, p_low: float, p_high: float) -> pd.Series:
+    tmp = df[[sector_col]].copy()
+    tmp["_score"] = pd.to_numeric(df[score_col], errors="coerce")
+
+    def _norm(g: pd.Series) -> pd.Series:
+        return winsor_minmax_0_100(g, p_low, p_high)
+
+    return tmp.groupby(sector_col, dropna=False)["_score"].transform(_norm)
+
+
+def bucket_counts(df: pd.DataFrame, bucket_col: str) -> pd.DataFrame:
+    counts = df[bucket_col].value_counts().reindex(bucket_order, fill_value=0).reset_index()
+    counts.columns = ["Bucket", "Count"]
+    return counts
+
+
+FRIENDLY_COLS = {
+    "ticker": "Ticker",
+    "ticker_base": "Ticker",
+    "sector": "Sector",
+    "year": "Year",
+    "bucket": "Bucket",
+    "label": "Bucket",
+    "health_tech": "Technical Score",
+    "fund_norm_0_100": "Fundamental Health",
+    "fund_health_0_100": "Fundamental Health",
+    "fund_0_100": "Fundamental Health",
+    "score_combined": "Combined Score",
+    "score_combined_raw": "Combined Score (Raw)",
+    "trend": "Trend",
+    "risk": "Risk",
+    "liquidity": "Liquidity",
+    "rsi14": "RSI14",
+    "max_drawdown": "Max Drawdown",
+    "close": "Close",
+    "tech_minus_fund": "Tech - Fundamental",
+    "fund_minus_tech": "Fundamental - Tech",
+    "fund_bucket": "Bucket",
+    "S_Profit": "Profit",
+    "S_Leverage": "Leverage",
+    "S_Growth": "Growth",
+    "S_CashQ": "Cash Quality",
+}
+
+
+def rename_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(columns=FRIENDLY_COLS)
+
+
 def add_label_from_score(df: pd.DataFrame, score_col: str, out_col: str = "label") -> pd.DataFrame:
     d = df.copy()
     labels = []
@@ -184,6 +312,15 @@ def hard_flag_panel(title: str, tickers: list[str], total_universe: int, expande
 def clean_price_dict(d: dict) -> dict:
     """Remove debug keys like _ERROR_ from load_prices result."""
     return {k: v for k, v in d.items() if not str(k).startswith("_")}
+
+
+def get_prices_cached(picked: list[str], start, debug: bool):
+    key = f"prices:{str(start)}:{','.join(sorted(picked))}"
+    if key in st.session_state:
+        return st.session_state[key]
+    raw_data = load_prices(picked, start=str(start), debug=debug)
+    st.session_state[key] = raw_data
+    return raw_data
 
 
 def show_prices_debug(d: dict, picked: list[str], debug_mode: bool):
@@ -427,12 +564,34 @@ def render_kpis(options_universe: list[str], start, picked: list[str], sector_li
     c4.metric("Sectors", f"{len(sector_list):,}")
 
 
+def render_dash_metric(
+    title: str,
+    value: str,
+    subtitle: str = "",
+    accent: str = "#00c896",
+    icon: str = "●",
+    **_kwargs,
+):
+    sub_html = f'<div class="dash-sub">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f"""
+        <div class="dash-card">
+          <div class="dash-title"><span class="dash-chip" style="border-color:{accent}; color:{accent};">{icon}</span> {title}</div>
+          <div class="dash-value">{value}</div>
+          {sub_html}
+          <div class="dash-accent" style="border-color:{accent};"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _mode_selector():
     st.subheader("Explore — Insight Dashboard")
     st.caption("Pilih mode dulu. Setelah itu lihat ringkasan (KPI) → distribusi → top ranking.")
     mode = st.radio(
         "Mode",
-        ["Teknikal", "Fundamental", "Gabungan"],
+        ["Dashboard", "Teknikal", "Fundamental", "Gabungan"],
         horizontal=True,
         key="explore_mode",
     )
@@ -489,6 +648,7 @@ with st.sidebar:
     st.subheader("🧩 Gabungan")
     w_tech = st.slider("Bobot Teknikal", 0.0, 1.0, 0.5, 0.05)
     w_fund = st.slider("Bobot Fundamental", 0.0, 1.0, 0.5, 0.05)
+    normalize_combined = st.toggle("Normalize Combined by Sector (recommended)", value=True)
 
     st.divider()
     if st.button("Clear cache (harga & fundamental)"):
@@ -635,16 +795,240 @@ with tab_explore:
     mode = _mode_selector()
 
     # -------------------------
+    # DASHBOARD (SINGLE SLIDE)
+    # -------------------------
+    if mode == "Dashboard":
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("🧭 Ringkas — Single Slide Dashboard")
+        st.caption("Ringkasannya dibuat compact supaya tidak perlu scroll jauh. Detail ada di expander.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        with st.spinner("Loading price data..."):
+            raw_data = get_prices_cached(picked, start, debug=True)
+
+        data = show_prices_debug(raw_data, picked, debug_mode)
+
+        if not data:
+            st.warning("Tidak ada data harga yang berhasil diambil. Cek ticker / koneksi.")
+            st.stop()
+
+        tech_rows = []
+        for t, dfp in data.items():
+            s = health_from_df(dfp)
+            tech_rows.append(
+                {
+                    "ticker": t,
+                    "ticker_base": to_base_ticker(t),
+                    "health_tech": s.get("health", np.nan),
+                    "trend": s.get("trend", np.nan),
+                    "risk": s.get("risk", np.nan),
+                    "liquidity": s.get("liq", np.nan),
+                }
+            )
+
+        tech_df = pd.DataFrame(tech_rows).dropna(subset=["health_tech"]).copy()
+        tech_df["health_tech"] = clip_0_100_series(tech_df["health_tech"])
+        if tech_df.empty:
+            st.warning("Skor teknikal belum bisa dihitung (data kurang panjang / banyak NaN).")
+            st.stop()
+
+        fund_view = core_ref[["ticker_base", "sector", "fund_health_0_100", "fund_bucket"]].rename(
+            columns={"fund_health_0_100": "fund_norm_0_100"}
+        )
+        combined = tech_df.merge(fund_view, on="ticker_base", how="left")
+        if sync_tech_to_fund:
+            combined = combined.dropna(subset=["fund_norm_0_100"])
+
+        if combined.empty:
+            st.warning("Tidak ada ticker yang match setelah sinkron fundamental.")
+            st.stop()
+
+        denom = (w_tech + w_fund) if (w_tech + w_fund) > 0 else 1.0
+        combined["score_combined_raw"] = ((combined["health_tech"] * w_tech) + (combined["fund_norm_0_100"] * w_fund)) / denom
+        if normalize_combined:
+            combined["score_combined"] = normalize_by_sector(
+                combined,
+                "score_combined_raw",
+                "sector",
+                float(p_low),
+                float(p_high),
+            )
+        else:
+            combined["score_combined"] = clip_0_100_series(combined["score_combined_raw"])
+        combined["bucket"] = combined["score_combined"].apply(label_bucket)
+
+        avg_combined = float(pd.to_numeric(combined["score_combined"], errors="coerce").mean())
+        avg_tech = float(pd.to_numeric(combined["health_tech"], errors="coerce").mean())
+        avg_fund = float(pd.to_numeric(combined["fund_norm_0_100"], errors="coerce").mean())
+        pct_strong = float((combined["bucket"] == "Strong").mean() * 100)
+        med_risk = float(pd.to_numeric(combined["risk"], errors="coerce").median())
+        breadth_pct = float((combined["score_combined"] >= 60).mean() * 100)
+        if breadth_pct >= 60:
+            breadth_note = "Breadth is strong"
+        elif breadth_pct >= 40:
+            breadth_note = "Breadth is neutral"
+        else:
+            breadth_note = "Breadth is weak"
+
+        m1, m2, m3, m4 = st.columns(4, gap="large")
+        with m1:
+            render_dash_metric(
+                "Avg Combined Score",
+                f"{avg_combined:.1f}",
+                "Normalized",
+                accent="#00c896",
+                icon="📈",
+            )
+        with m2:
+            render_dash_metric(
+                "Median Risk",
+                "—" if np.isnan(med_risk) else f"{med_risk:.2f}",
+                "Risk median",
+                accent="#7dd3fc",
+                icon="🛡️",
+            )
+        with m3:
+            render_dash_metric(
+                "% Strong",
+                f"{pct_strong:.0f}%",
+                f"{len(combined):,} emiten",
+                accent="#f5c542",
+                icon="⭐",
+            )
+        with m4:
+            render_dash_metric(
+                "Breadth (≥ 60)",
+                f"{breadth_pct:.0f}%",
+                "Tickers above 60",
+                accent="#a78bfa",
+                icon="🌊",
+            )
+
+        st.caption(f"{breadth_note} • Avg Tech {avg_tech:.1f} • Avg Fund {avg_fund:.1f}")
+
+        c1, c2, c3 = st.columns([0.34, 0.33, 0.33], gap="large")
+        with c1:
+            donut = bucket_counts(combined, "bucket")
+            fig = px.pie(
+                donut,
+                names="Bucket",
+                values="Count",
+                hole=0.62,
+                color="Bucket",
+                category_orders={"Bucket": bucket_order},
+                color_discrete_map=BUCKET_COLORS,
+            )
+            fig = style_fig(fig, height=320, title="Bucket Distribution (Combined)")
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c2:
+            top_view = combined.sort_values("score_combined", ascending=False).head(12)
+            fig = px.bar(
+                top_view.sort_values("score_combined", ascending=True),
+                x="score_combined",
+                y="ticker",
+                orientation="h",
+                color="bucket",
+                color_discrete_map=BUCKET_COLORS,
+                labels={"score_combined": "Combined Score", "ticker": "Ticker"},
+            )
+            fig = style_fig(fig, height=320, title="Top 12 Combined Score")
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c3:
+            fig = px.scatter(
+                combined,
+                x="health_tech",
+                y="fund_norm_0_100",
+                size="score_combined",
+                color="bucket",
+                hover_name="ticker",
+                color_discrete_map=BUCKET_COLORS,
+                labels={"health_tech": "Technical Score", "fund_norm_0_100": "Fundamental Health"},
+            )
+            fig.add_shape(type="rect", x0=0, x1=60, y0=0, y1=60, fillcolor="rgba(255,99,132,0.10)", line_width=0)
+            fig.add_shape(type="rect", x0=60, x1=100, y0=0, y1=60, fillcolor="rgba(255,159,67,0.10)", line_width=0)
+            fig.add_shape(type="rect", x0=0, x1=60, y0=60, y1=100, fillcolor="rgba(160,160,160,0.08)", line_width=0)
+            fig.add_shape(type="rect", x0=60, x1=100, y0=60, y1=100, fillcolor="rgba(0,184,148,0.10)", line_width=0)
+            fig.add_vline(x=60, line_width=1)
+            fig.add_hline(y=60, line_width=1)
+            fig.add_annotation(x=80, y=92, text="Sweet Spot", showarrow=False)
+            fig.add_annotation(x=25, y=92, text="Fund OK, Tech Weak", showarrow=False)
+            fig.add_annotation(x=80, y=25, text="Tech OK, Fund Weak", showarrow=False)
+            fig.add_annotation(x=25, y=25, text="Avoid Zone", showarrow=False)
+            fig = style_fig(fig, height=320, title="Tech vs Fundamental (Quadrant)")
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.subheader("🏭 Sector Leaderboard")
+        sector_board = (
+            combined.groupby("sector", dropna=False)
+            .agg(avg_combined=("score_combined", "mean"), tickers=("ticker", "nunique"))
+            .reset_index()
+            .sort_values("avg_combined", ascending=False)
+            .head(10)
+        )
+        sector_board = sector_board.rename(
+            columns={
+                "sector": "Sector",
+                "avg_combined": "Avg Combined Score",
+                "tickers": "Tickers",
+            }
+        )
+        sector_board["Avg Combined Score"] = pd.to_numeric(sector_board["Avg Combined Score"], errors="coerce").round(1)
+        st.dataframe(sector_board, use_container_width=True, hide_index=True)
+
+        st.subheader("🔎 Top Movers / Mismatch")
+        combined["tech_minus_fund"] = combined["health_tech"] - combined["fund_norm_0_100"]
+        combined["fund_minus_tech"] = combined["fund_norm_0_100"] - combined["health_tech"]
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown("**Top 10 — Technical > Fundamental**")
+            view = combined.sort_values("tech_minus_fund", ascending=False).head(10)
+            cols = ["ticker", "tech_minus_fund", "health_tech", "fund_norm_0_100", "score_combined"]
+            display = round_cols(view[cols], ["tech_minus_fund", "health_tech", "fund_norm_0_100", "score_combined"], 2)
+            st.dataframe(rename_for_display(display), use_container_width=True, hide_index=True)
+        with right:
+            st.markdown("**Top 10 — Fundamental > Technical**")
+            view = combined.sort_values("fund_minus_tech", ascending=False).head(10)
+            cols = ["ticker", "fund_minus_tech", "fund_norm_0_100", "health_tech", "score_combined"]
+            display = round_cols(view[cols], ["fund_minus_tech", "health_tech", "fund_norm_0_100", "score_combined"], 2)
+            st.dataframe(rename_for_display(display), use_container_width=True, hide_index=True)
+
+        with st.expander("Lihat detail kandidat", expanded=False):
+            top_n = safe_topn_slider("Top N", len(combined), default=30, min_floor=5, cap=200, key="topn_dash")
+            view = combined.sort_values("score_combined", ascending=False).head(top_n).copy()
+            view = round_cols(view, ["health_tech", "fund_norm_0_100", "score_combined", "score_combined_raw"], 2)
+            show_cols = [
+                "ticker",
+                "sector",
+                "score_combined",
+                "score_combined_raw",
+                "bucket",
+                "health_tech",
+                "fund_norm_0_100",
+                "trend",
+                "risk",
+                "liquidity",
+            ]
+            st.dataframe(rename_for_display(view[show_cols]), use_container_width=True, hide_index=True)
+
+    # -------------------------
     # TEKNIKAL
     # -------------------------
-    if mode == "Teknikal":
+    elif mode == "Teknikal":
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("📈 Technical Market Snapshot")
         st.caption("Tujuan: screening cepat berdasarkan trend/risk/liquidity + skor teknikal (0–100).")
         st.markdown("</div>", unsafe_allow_html=True)
 
         with st.spinner("Loading price data..."):
-            raw_data = load_prices(picked, start=str(start), debug=True)
+            raw_data = get_prices_cached(picked, start, debug=True)
 
         data = show_prices_debug(raw_data, picked, debug_mode)
 
@@ -670,6 +1054,7 @@ with tab_explore:
             )
 
         tech_df = pd.DataFrame(rows).dropna(subset=["health_tech"]).copy()
+        tech_df["health_tech"] = clip_0_100_series(tech_df["health_tech"])
         if tech_df.empty:
             st.warning("Skor teknikal belum bisa dihitung (data kurang panjang / banyak NaN).")
             st.stop()
@@ -697,7 +1082,7 @@ with tab_explore:
 
         with right:
             hist = tech_df[["health_tech"]].copy()
-            fig = px.histogram(hist, x="health_tech", nbins=20)
+            fig = px.histogram(hist, x="health_tech", nbins=20, labels={"health_tech": "Technical Score"})
             fig = style_fig(fig, height=360, title="Distribusi Skor Teknikal (0–100)")
             st.plotly_chart(fig, use_container_width=True)
 
@@ -710,10 +1095,17 @@ with tab_explore:
         view = add_label_from_score(view, "health_tech", out_col="label")
 
         show_cols = ["ticker", "health_tech", "label", "trend", "risk", "liquidity", "rsi14", "max_drawdown"]
-        st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
+        st.dataframe(rename_for_display(view[show_cols]), use_container_width=True, hide_index=True)
 
         bar_df = view.sort_values("health_tech", ascending=True).copy()
-        fig = px.bar(bar_df, x="health_tech", y="ticker", orientation="h", color="label")
+        fig = px.bar(
+            bar_df,
+            x="health_tech",
+            y="ticker",
+            orientation="h",
+            color="label",
+            labels={"health_tech": "Technical Score", "ticker": "Ticker"},
+        )
         fig = style_fig(fig, height=min(780, 140 + 22 * len(bar_df)), title=f"Top {len(bar_df)} Technical Score")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -855,7 +1247,13 @@ with tab_explore:
                 .sort_values("fund_health_0_100", ascending=False)
                 .head(12)
             )
-            fig = px.bar(sec_avg, x="fund_health_0_100", y="sector", orientation="h")
+            fig = px.bar(
+                sec_avg,
+                x="fund_health_0_100",
+                y="sector",
+                orientation="h",
+                labels={"fund_health_0_100": "Fundamental Health", "sector": "Sector"},
+            )
             fig = style_fig(fig, height=360, title="Rata-rata Fundamental Score per Sektor (Top 12)")
             st.plotly_chart(fig, use_container_width=True)
 
@@ -876,14 +1274,14 @@ with tab_explore:
                 with st.expander(f"{sec} — {len(sec_df):,} emiten", expanded=False):
                     cols = ["fund_bucket", "ticker_base", "year", "fund_health_0_100", "S_Profit", "S_Leverage", "S_Growth"]
                     df_show = round_cols(sec_df[cols].head(top_each), ["fund_health_0_100", "S_Profit", "S_Leverage", "S_Growth"], 1)
-                    st.dataframe(df_show, use_container_width=True, hide_index=True)
+                    st.dataframe(rename_for_display(df_show), use_container_width=True, hide_index=True)
 
         topn = safe_topn_slider("Top N (overall)", len(core_view), default=30, min_floor=5, cap=300, key="topn_fund")
         view = core_view.sort_values("fund_health_0_100", ascending=False).head(topn).copy()
         show_cols = ["fund_bucket", "ticker_base", "year", "sector", "fund_health_0_100", "S_Profit", "S_Leverage", "S_Growth"]
         view = round_cols(view[show_cols], ["fund_health_0_100", "S_Profit", "S_Leverage", "S_Growth"], 1)
 
-        st.dataframe(view, use_container_width=True, hide_index=True)
+        st.dataframe(rename_for_display(view), use_container_width=True, hide_index=True)
 
         bar_df = view.sort_values("fund_health_0_100", ascending=True).copy()
         fig = px.bar(
@@ -894,6 +1292,7 @@ with tab_explore:
             color="fund_bucket",
             color_discrete_map={**BUCKET_COLORS, "Other": "#9aa0a6"},
             category_orders={"fund_bucket": bucket_order},
+            labels={"fund_health_0_100": "Fundamental Health", "ticker_base": "Ticker"},
         )
 
         fig.update_layout(
@@ -932,7 +1331,7 @@ with tab_explore:
         st.markdown("</div>", unsafe_allow_html=True)
 
         with st.spinner("Loading price data..."):
-            raw_data = load_prices(picked, start=str(start), debug=True)
+            raw_data = get_prices_cached(picked, start, debug=True)
 
         data = show_prices_debug(raw_data, picked, debug_mode)
 
@@ -954,7 +1353,8 @@ with tab_explore:
                 }
             )
 
-        tech_df = pd.DataFrame(tech_rows).dropna(subset=["health_tech"])
+        tech_df = pd.DataFrame(tech_rows).dropna(subset=["health_tech"]).copy()
+        tech_df["health_tech"] = clip_0_100_series(tech_df["health_tech"])
         if tech_df.empty:
             st.warning("Tidak ada skor teknikal yang valid.")
             st.stop()
@@ -972,9 +1372,19 @@ with tab_explore:
             st.stop()
 
         denom = (w_tech + w_fund) if (w_tech + w_fund) > 0 else 1.0
-        combined["score_combined"] = ((combined["health_tech"] * w_tech) + (combined["fund_norm_0_100"] * w_fund)) / denom
+        combined["score_combined_raw"] = ((combined["health_tech"] * w_tech) + (combined["fund_norm_0_100"] * w_fund)) / denom
+        if normalize_combined:
+            combined["score_combined"] = normalize_by_sector(
+                combined,
+                "score_combined_raw",
+                "sector",
+                float(p_low),
+                float(p_high),
+            )
+        else:
+            combined["score_combined"] = clip_0_100_series(combined["score_combined_raw"])
         combined["bucket"] = combined["score_combined"].apply(label_bucket)
-        combined = round_cols(combined, ["health_tech", "fund_norm_0_100", "score_combined"], 2)
+        combined = round_cols(combined, ["health_tech", "fund_norm_0_100", "score_combined", "score_combined_raw"], 2)
         combined = add_label_from_score(combined, "score_combined", out_col="label")
         combined = combined.sort_values("score_combined", ascending=False)
 
@@ -982,34 +1392,125 @@ with tab_explore:
         pct_strong = float((combined["bucket"] == "Strong").mean() * 100)
         avg_t = float(pd.to_numeric(combined["health_tech"], errors="coerce").mean())
         avg_f = float(pd.to_numeric(combined["fund_norm_0_100"], errors="coerce").mean())
+        med_risk = float(pd.to_numeric(combined["risk"], errors="coerce").median())
+        breadth_pct = float((combined["score_combined"] >= 60).mean() * 100)
+        if breadth_pct >= 60:
+            breadth_note = "Breadth is strong"
+        elif breadth_pct >= 40:
+            breadth_note = "Breadth is neutral"
+        else:
+            breadth_note = "Breadth is weak"
 
         c1, c2, c3, c4 = st.columns(4, gap="large")
-        c1.metric("Avg Combined", f"{avg_c:.1f}")
-        c2.metric("% Strong", f"{pct_strong:.0f}%")
-        c3.metric("Avg Tech", f"{avg_t:.1f}")
-        c4.metric("Avg Fund", f"{avg_f:.1f}")
+        with c1:
+            render_dash_metric(
+                "Avg Combined Score",
+                f"{avg_c:.1f}",
+                "Normalized",
+                accent="#00c896",
+                icon="📈",
+            )
+        with c2:
+            render_dash_metric(
+                "Median Risk",
+                "—" if np.isnan(med_risk) else f"{med_risk:.2f}",
+                "Risk median",
+                accent="#7dd3fc",
+                icon="🛡️",
+            )
+        with c3:
+            render_dash_metric(
+                "% Strong",
+                f"{pct_strong:.0f}%",
+                f"{len(combined):,} emiten",
+                accent="#f5c542",
+                icon="⭐",
+            )
+        with c4:
+            render_dash_metric(
+                "Breadth (≥ 60)",
+                f"{breadth_pct:.0f}%",
+                "Tickers above 60",
+                accent="#a78bfa",
+                icon="🌊",
+            )
+
+        st.caption(f"{breadth_note} • Avg Tech {avg_t:.1f} • Avg Fund {avg_f:.1f}")
 
         left, right = st.columns([0.42, 0.58], gap="large")
         with left:
-            donut = combined["bucket"].value_counts().reset_index()
-            donut.columns = ["Bucket", "Count"]
-            fig = px.pie(donut, names="Bucket", values="Count", hole=0.62)
-            fig = style_fig(fig, height=360, title="Distribusi Bucket (Combined)")
+            donut = bucket_counts(combined, "bucket")
+            fig = px.pie(
+                donut,
+                names="Bucket",
+                values="Count",
+                hole=0.62,
+                color="Bucket",
+                category_orders={"Bucket": bucket_order},
+                color_discrete_map=BUCKET_COLORS,
+            )
+            fig = style_fig(fig, height=360, title="Bucket Distribution (Combined)")
             st.plotly_chart(fig, use_container_width=True)
 
         with right:
             w_df = pd.DataFrame({"Component": ["Tech", "Fund"], "Weight": [float(w_tech), float(w_fund)]})
             fig = px.bar(w_df, x="Component", y="Weight", text="Weight")
-            fig = style_fig(fig, height=360, title="Bobot Gabungan (User-controlled)")
+            fig = style_fig(fig, height=360, title="Weight Mix (User-controlled)")
             st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
 
-        st.subheader("🏁 Top Kandidat (Combined)")
+        st.subheader("🏭 Sector Leaderboard")
+        sector_board = (
+            combined.groupby("sector", dropna=False)
+            .agg(avg_combined=("score_combined", "mean"), tickers=("ticker", "nunique"))
+            .reset_index()
+            .sort_values("avg_combined", ascending=False)
+            .head(10)
+        )
+        sector_board = sector_board.rename(
+            columns={
+                "sector": "Sector",
+                "avg_combined": "Avg Combined Score",
+                "tickers": "Tickers",
+            }
+        )
+        sector_board["Avg Combined Score"] = pd.to_numeric(sector_board["Avg Combined Score"], errors="coerce").round(1)
+        st.dataframe(sector_board, use_container_width=True, hide_index=True)
+
+        st.subheader("🔎 Top Movers / Mismatch")
+        combined["tech_minus_fund"] = combined["health_tech"] - combined["fund_norm_0_100"]
+        combined["fund_minus_tech"] = combined["fund_norm_0_100"] - combined["health_tech"]
+        left, right = st.columns(2, gap="large")
+        with left:
+            st.markdown("**Top 10 — Technical > Fundamental**")
+            view = combined.sort_values("tech_minus_fund", ascending=False).head(10)
+            cols = ["ticker", "tech_minus_fund", "health_tech", "fund_norm_0_100", "score_combined"]
+            display = round_cols(view[cols], ["tech_minus_fund", "health_tech", "fund_norm_0_100", "score_combined"], 2)
+            st.dataframe(rename_for_display(display), use_container_width=True, hide_index=True)
+        with right:
+            st.markdown("**Top 10 — Fundamental > Technical**")
+            view = combined.sort_values("fund_minus_tech", ascending=False).head(10)
+            cols = ["ticker", "fund_minus_tech", "fund_norm_0_100", "health_tech", "score_combined"]
+            display = round_cols(view[cols], ["fund_minus_tech", "health_tech", "fund_norm_0_100", "score_combined"], 2)
+            st.dataframe(rename_for_display(display), use_container_width=True, hide_index=True)
+
+        st.subheader("🏁 Top Candidates (Combined)")
         top_n = safe_topn_slider("Top N", len(combined), default=30, min_floor=5, cap=200, key="topn_combo")
         view = combined.head(top_n).copy()
-        show_cols = ["ticker", "sector", "score_combined", "label", "health_tech", "fund_norm_0_100", "trend", "risk", "liquidity"]
-        st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
+        show_cols = [
+            "ticker",
+            "sector",
+            "score_combined",
+            "score_combined_raw",
+            "label",
+            "health_tech",
+            "fund_norm_0_100",
+            "trend",
+            "risk",
+            "liquidity",
+        ]
+        st.dataframe(rename_for_display(view[show_cols]), use_container_width=True, hide_index=True)
 
         plot_df = combined.copy()
         fig = px.scatter(
@@ -1019,6 +1520,8 @@ with tab_explore:
             size="score_combined",
             color="bucket",
             hover_name="ticker",
+            color_discrete_map=BUCKET_COLORS,
+            labels={"health_tech": "Technical Score", "fund_norm_0_100": "Fundamental Health"},
             hover_data={
                 "score_combined": ":.2f",
                 "health_tech": ":.2f",
@@ -1043,7 +1546,7 @@ with tab_explore:
         fig.add_annotation(x=80, y=25, text="Tech OK, Fund Weak", showarrow=False)
         fig.add_annotation(x=25, y=25, text="Avoid Zone", showarrow=False)
 
-        fig = style_fig(fig, height=640, title="Teknikal vs Fundamental (Bubble • 0–100)")
+        fig = style_fig(fig, height=640, title="Tech vs Fundamental (Quadrant • 0–100)")
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -1060,7 +1563,7 @@ with tab_analyze:
     base = to_base_ticker(analyze_pick)
 
     with st.spinner("Loading detail..."):
-        raw_1 = load_prices([analyze_pick], start=str(start), debug=True)
+        raw_1 = get_prices_cached([analyze_pick], start, debug=True)
         if "_ERROR_" in raw_1:
             st.error(raw_1["_ERROR_"])
         data_1 = clean_price_dict(raw_1)
@@ -1069,8 +1572,8 @@ with tab_analyze:
         tech = health_from_df(dfp) if dfp is not None else {}
 
         fund_row = core_ref[core_ref["ticker_base"] == base].head(1)
-        fund_score = float(fund_row["fund_health_0_100"].iloc[0]) if not fund_row.empty else np.nan
-        tech_score = float(tech.get("health", np.nan)) if tech else np.nan
+        fund_score = clip_0_100_value(fund_row["fund_health_0_100"].iloc[0]) if not fund_row.empty else np.nan
+        tech_score = clip_0_100_value(tech.get("health", np.nan)) if tech else np.nan
 
         denom = (w_tech + w_fund) if (w_tech + w_fund) > 0 else 1.0
         combo_score = (
@@ -1180,7 +1683,7 @@ with tab_compare:
         st.info("Pilih minimal 2 ticker untuk compare.")
     else:
         with st.spinner("Loading compare data..."):
-            raw_cmp = load_prices(picks, start=str(start), debug=True)
+            raw_cmp = get_prices_cached(picks, start, debug=True)
 
         if "_ERROR_" in raw_cmp:
             st.error(raw_cmp["_ERROR_"])
@@ -1193,8 +1696,8 @@ with tab_compare:
             base = to_base_ticker(t)
 
             fund_row = core_ref[core_ref["ticker_base"] == base].head(1)
-            fund_score = float(fund_row["fund_health_0_100"].iloc[0]) if not fund_row.empty else np.nan
-            tech_score = float(tech.get("health", np.nan)) if tech else np.nan
+            fund_score = clip_0_100_value(fund_row["fund_health_0_100"].iloc[0]) if not fund_row.empty else np.nan
+            tech_score = clip_0_100_value(tech.get("health", np.nan)) if tech else np.nan
 
             denom = (w_tech + w_fund) if (w_tech + w_fund) > 0 else 1.0
             combo_score = (
@@ -1217,7 +1720,7 @@ with tab_compare:
         comp = pd.DataFrame(rows)
         comp = round_cols(comp, ["score_combined", "health_tech", "fund_0_100"], 2).sort_values("score_combined", ascending=False)
 
-        st.dataframe(comp, use_container_width=True, hide_index=True)
+        st.dataframe(rename_for_display(comp), use_container_width=True, hide_index=True)
 
         fig = px.scatter(
             comp,
@@ -1226,6 +1729,7 @@ with tab_compare:
             size="score_combined",
             color="bucket",
             hover_name="ticker",
+            labels={"health_tech": "Technical Score", "fund_0_100": "Fundamental Health"},
             hover_data={"sector": True, "score_combined": ":.2f", "health_tech": ":.2f", "fund_0_100": ":.2f"},
         )
         fig.add_shape(type="rect", x0=60, x1=100, y0=60, y1=100, fillcolor="rgba(0,184,148,0.10)", line_width=0)
