@@ -564,7 +564,14 @@ def render_kpis(options_universe: list[str], start, picked: list[str], sector_li
     c4.metric("Sectors", f"{len(sector_list):,}")
 
 
-def render_dash_metric(title: str, value: str, subtitle: str = "", accent: str = "#00c896", icon: str = "●"):
+def render_dash_metric(
+    title: str,
+    value: str,
+    subtitle: str = "",
+    accent: str = "#00c896",
+    icon: str = "●",
+    **_kwargs,
+):
     sub_html = f'<div class="dash-sub">{subtitle}</div>' if subtitle else ""
     st.markdown(
         f"""
