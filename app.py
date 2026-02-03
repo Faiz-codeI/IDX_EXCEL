@@ -99,10 +99,56 @@ def inject_css() -> None:
           padding: 0.9rem 1rem;
           background: rgba(255,255,255,0.04);
           box-shadow: 0 10px 20px rgba(0,0,0,0.20);
+
+          transition: transform 0.15s ease, box-shadow 0.15s ease;
+          position: relative;
+          overflow: hidden;
+        }
+        .dash-card::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(120% 120% at 0% 0%, rgba(255,255,255,0.10), transparent 50%);
+          opacity: 0.8;
+          pointer-events: none;
+        }
+        .dash-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 14px 26px rgba(0,0,0,0.28);
+=======
+main
         }
         .dash-title { font-size: 0.9rem; letter-spacing: 0.3px; color: rgba(255,255,255,0.7); }
         .dash-value { font-size: 1.45rem; font-weight: 700; margin-top: 0.2rem; }
         .dash-sub { color: rgba(255,255,255,0.6); font-size: 0.82rem; }
+        .dash-accent {
+          position: absolute;
+          inset: 0;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.10);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+          pointer-events: none;
+        }
+        .dash-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3rem;
+          font-size: 0.72rem;
+          padding: 0.18rem 0.5rem;
+          border-radius: 999px;
+          background: rgba(0,0,0,0.25);
+          border: 1px solid rgba(255,255,255,0.12);
+          color: rgba(255,255,255,0.75);
+        }
+        .chart-card {
+          border: 1px solid rgba(255,255,255,0.10);
+          border-radius: 16px;
+          padding: 0.3rem 0.6rem 0.6rem;
+          background: rgba(255,255,255,0.03);
+          box-shadow: 0 10px 24px rgba(0,0,0,0.16);
+        }
+=======
+
 
         /* Table polish */
         div[data-testid="stDataFrame"] { border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.10); }
@@ -439,14 +485,25 @@ def render_kpis(options_universe: list[str], start, picked: list[str], sector_li
     c4.metric("Sectors", f"{len(sector_list):,}")
 
 
+
+def render_dash_metric(title: str, value: str, subtitle: str = "", accent: str = "#00c896"):
+
 def render_dash_metric(title: str, value: str, subtitle: str = ""):
+
     sub_html = f'<div class="dash-sub">{subtitle}</div>' if subtitle else ""
     st.markdown(
         f"""
         <div class="dash-card">
+
+          <div class="dash-title"><span class="dash-chip" style="border-color:{accent}; color:{accent};">●</span> {title}</div>
+          <div class="dash-value">{value}</div>
+          {sub_html}
+          <div class="dash-accent" style="border-color:{accent};"></div>
+
           <div class="dash-title">{title}</div>
           <div class="dash-value">{value}</div>
           {sub_html}
+
         </div>
         """,
         unsafe_allow_html=True,
@@ -719,6 +776,15 @@ with tab_explore:
 
         m1, m2, m3, m4 = st.columns(4, gap="large")
         with m1:
+
+            render_dash_metric("Avg Combined", f"{avg_combined:.1f}", "Teknikal + Fundamental", accent="#00c896")
+        with m2:
+            render_dash_metric("Avg Tech", f"{avg_tech:.1f}", "Skor teknik (0–100)", accent="#7dd3fc")
+        with m3:
+            render_dash_metric("Avg Fund", f"{avg_fund:.1f}", f"Tahun {int(ref_year)}", accent="#f5c542")
+        with m4:
+            render_dash_metric("% Strong", f"{pct_strong:.0f}%", f"{len(combined):,} emiten", accent="#a78bfa")
+
             render_dash_metric("Avg Combined", f"{avg_combined:.1f}", "Teknikal + Fundamental")
         with m2:
             render_dash_metric("Avg Tech", f"{avg_tech:.1f}", "Skor teknik (0–100)")
@@ -741,7 +807,13 @@ with tab_explore:
                 color_discrete_map=BUCKET_COLORS,
             )
             fig = style_fig(fig, height=320, title="Distribusi Bucket (Combined)")
+
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
             st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.plotly_chart(fig, use_container_width=True)
+
 
         with c2:
             top_view = combined.sort_values("score_combined", ascending=False).head(12)
@@ -754,7 +826,13 @@ with tab_explore:
                 color_discrete_map=BUCKET_COLORS,
             )
             fig = style_fig(fig, height=320, title="Top 12 Combined Score")
+
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
             st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.plotly_chart(fig, use_container_width=True)
+
 
         with c3:
             fig = px.scatter(
@@ -767,7 +845,12 @@ with tab_explore:
                 color_discrete_map=BUCKET_COLORS,
             )
             fig = style_fig(fig, height=320, title="Tech vs Fund (Bubble)")
+
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
             st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+
 
         with st.expander("Lihat detail kandidat", expanded=False):
             top_n = safe_topn_slider("Top N", len(combined), default=30, min_floor=5, cap=200, key="topn_dash")
