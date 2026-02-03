@@ -6,9 +6,9 @@ A simple Streamlit app starter for IDX Excel.
 
 ```bash
 pip install -r requirements.txt
-streamlit run streamlit_app.py
+streamlit run app.py
 ```
 
 ## Deployment
 
-Set the **Main file path** to `streamlit_app.py` when deploying with Streamlit Community Cloud.
+Set the **Main file path** to `app.py` when deploying with Streamlit Community Cloud.
