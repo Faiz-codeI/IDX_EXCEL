@@ -62,6 +62,18 @@ def render_kpis(universe, start, picked):
     c4.metric("Mode", "Teknikal + Fundamental")
 
 
+BUCKET_LABELS = {
+    "Strong": "🟢 Strong",
+    "Watch": "🟡 Watch",
+    "Risky": "🔴 Risky",
+    "N/A": "N/A",
+}
+
+
+def format_bucket(value: str) -> str:
+    return BUCKET_LABELS.get(value, value)
+
+
 st.set_page_config(page_title="IDX Dashboard — Teknikal + Fundamental", layout="wide")
 st.markdown("""
 <style>
@@ -183,10 +195,11 @@ with tab_explore:
             st.stop()
 
         tech_df["bucket"] = tech_df["health_tech"].apply(label_bucket)
+        tech_df["bucket_label"] = tech_df["bucket"].map(format_bucket)
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Avg Technical Score", f"{tech_df['health_tech'].mean():.1f}")
-        c2.metric("% Strong", f"{(tech_df['bucket']=='Strong').mean()*100:.0f}%")
+        c2.metric("% Strong", f"{(tech_df['bucket'] == 'Strong').mean()*100:.0f}%")
         c3.metric("Median Risk", f"{tech_df['risk'].median():.2f}")
         c4.metric("Saham Dianalisis", len(tech_df))
 
@@ -195,7 +208,7 @@ with tab_explore:
         left, right = st.columns([0.45, 0.55])
 
         with left:
-            donut = tech_df["bucket"].value_counts().reset_index()
+            donut = tech_df["bucket_label"].value_counts().reset_index()
             donut.columns = ["Bucket", "Count"]
             fig = px.pie(donut, names="Bucket", values="Count", hole=0.6)
             fig = style_fig(fig, height=360, title="Distribusi Kualitas Teknikal")
@@ -213,7 +226,9 @@ with tab_explore:
         top = tech_df.sort_values("health_tech", ascending=False).head(15)
         top = round_cols(top, ["health_tech", "trend", "risk", "liquidity"], 2)
         st.dataframe(
-            top[["ticker", "health_tech", "bucket", "trend", "risk", "liquidity"]],
+            top[["ticker", "health_tech", "bucket_label", "trend", "risk", "liquidity"]].rename(
+                columns={"bucket_label": "bucket"}
+            ),
             use_container_width=True,
             hide_index=True
         )
@@ -394,6 +409,7 @@ with tab_combo:
     ) / denom
 
     combined["bucket"] = combined["score_combined"].apply(label_bucket)
+    combined["bucket_label"] = combined["bucket"].map(format_bucket)
     view = combined.sort_values("score_combined", ascending=False)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -425,7 +441,8 @@ with tab_combo:
         chosen = st.radio("Pilih emiten", options, label_visibility="collapsed")
         st.caption("Ringkas Top list")
         st.dataframe(
-            view_top[["bucket", "ticker_base", "score_combined"]].rename(columns={
+            view_top[["bucket_label", "ticker_base", "score_combined"]].rename(columns={
+                "bucket_label": "Bucket",
                 "ticker_base": "Ticker",
                 "score_combined": "Combined"
             }),
@@ -435,7 +452,7 @@ with tab_combo:
 
     with right:
         row = view[view["ticker"] == chosen].iloc[0].to_dict()
-        render_symbol_header(chosen, row["ticker_base"], f"Status: {row['bucket']}")
+        render_symbol_header(chosen, row["ticker_base"], f"Status: {row['bucket_label']}")
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Combined", f"{row['score_combined']:.1f}")
@@ -449,7 +466,7 @@ with tab_combo:
                 view,
                 x="health_tech",
                 y="fund_norm_0_100",
-                hover_data=["ticker", "bucket"],
+                hover_data=["ticker", "bucket_label"],
                 title="Teknikal vs Fundamental (normalized 0–100)"
             )
             fig.add_hline(y=60)
