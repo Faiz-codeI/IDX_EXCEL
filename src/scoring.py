@@ -19,10 +19,10 @@ def normalize_0_100(s: pd.Series) -> pd.Series:
 
 def label_bucket(x):
     if x is None:
-        return "N/A"
+        return "—"
     x = pd.to_numeric(x, errors="coerce")
     if pd.isna(x):
-        return "N/A"
+        return "—"
     if x >= 80:
         return "Strong"
     if x >= 60:
