@@ -29,6 +29,7 @@ from src.dataio import (
 )
 from src.technical import load_prices, health_from_df
 from src.scoring import label_bucket
+from src.insights import build_market_pulse, render_insights
 
 
 # ======================================================
@@ -857,6 +858,9 @@ with tab_explore:
             combined["score_combined"] = clip_0_100_series(combined["score_combined_raw"])
         combined["bucket"] = combined["score_combined"].apply(label_bucket)
 
+        items = build_market_pulse(combined)
+        render_insights(items)
+
         avg_combined = float(pd.to_numeric(combined["score_combined"], errors="coerce").mean())
         avg_tech = float(pd.to_numeric(combined["health_tech"], errors="coerce").mean())
         avg_fund = float(pd.to_numeric(combined["fund_norm_0_100"], errors="coerce").mean())
@@ -1387,6 +1391,9 @@ with tab_explore:
         combined = round_cols(combined, ["health_tech", "fund_norm_0_100", "score_combined", "score_combined_raw"], 2)
         combined = add_label_from_score(combined, "score_combined", out_col="label")
         combined = combined.sort_values("score_combined", ascending=False)
+
+        items = build_market_pulse(combined)
+        render_insights(items)
 
         avg_c = float(pd.to_numeric(combined["score_combined"], errors="coerce").mean())
         pct_strong = float((combined["bucket"] == "Strong").mean() * 100)
